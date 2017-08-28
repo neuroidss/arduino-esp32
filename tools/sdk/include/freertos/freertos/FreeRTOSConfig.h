@@ -90,10 +90,6 @@
 #define XT_TIMER_INDEX 0
 #elif CONFIG_FREERTOS_CORETIMER_1
 #define XT_TIMER_INDEX 1
-#elif CONFIG_FREERTOS_CORETIMER_2
-#define XT_TIMER_INDEX 2
-#elif CONFIG_FREERTOS_CORETIMER_3
-#define XT_TIMER_INDEX 3
 #endif
 
 #define configNUM_THREAD_LOCAL_STORAGE_POINTERS CONFIG_FREERTOS_THREAD_LOCAL_STORAGE_POINTERS
@@ -108,6 +104,7 @@
 
 /* configASSERT behaviour */
 #ifndef __ASSEMBLER__
+#include <stdlib.h> /* for abort() */
 #include "rom/ets_sys.h"
 
 #if defined(CONFIG_FREERTOS_ASSERT_DISABLE)
@@ -126,8 +123,6 @@
 #endif
 
 #if CONFIG_FREERTOS_ASSERT_ON_UNTESTED_FUNCTION
-#include <stdlib.h>
-#include "rom/ets_sys.h"
 #define UNTESTED_FUNCTION() { ets_printf("Untested FreeRTOS function %s\r\n", __FUNCTION__); configASSERT(false); } while(0)
 #else
 #define UNTESTED_FUNCTION()
@@ -152,9 +147,9 @@
  *----------------------------------------------------------*/
 
 #define configUSE_PREEMPTION			1
-#define configUSE_IDLE_HOOK				0
+#define configUSE_IDLE_HOOK				( CONFIG_FREERTOS_LEGACY_IDLE_HOOK )
 
-#define configUSE_TICK_HOOK				0
+#define configUSE_TICK_HOOK				( CONFIG_FREERTOS_LEGACY_TICK_HOOK )
 
 #define configTICK_RATE_HZ				( CONFIG_FREERTOS_HZ )
 
@@ -168,19 +163,21 @@
 #define configMAX_PRIORITIES			( 25 )
 #endif
 
-/* Minimal stack size. This may need to be increased for your application */
-/* NOTE: The FreeRTOS demos may not work reliably with stack size < 4KB.  */
-/* The Xtensa-specific examples should be fine with XT_STACK_MIN_SIZE.    */
-#if !(defined XT_STACK_MIN_SIZE)
-#error XT_STACK_MIN_SIZE not defined, did you include xtensa_config.h ?
+#ifndef CONFIG_ESP32_APPTRACE_ENABLE
+#define configMINIMAL_STACK_SIZE		768
+#else
+/* apptrace module requires at least 2KB of stack per task */
+#define configMINIMAL_STACK_SIZE		2048
 #endif
 
-#define configMINIMAL_STACK_SIZE		(XT_STACK_MIN_SIZE > 1024 ? XT_STACK_MIN_SIZE : 1024)
+#ifndef configIDLE_TASK_STACK_SIZE
+#define configIDLE_TASK_STACK_SIZE CONFIG_FREERTOS_IDLE_TASK_STACKSIZE
+#endif
 
 /* The Xtensa port uses a separate interrupt stack. Adjust the stack size */
 /* to suit the needs of your specific application.                        */
 #ifndef configISR_STACK_SIZE
-#define configISR_STACK_SIZE			1024//2048
+#define configISR_STACK_SIZE			CONFIG_FREERTOS_ISR_STACKSIZE
 #endif
 
 /* Minimal heap size to make sure examples can run on memory limited
@@ -192,7 +189,7 @@
 #define configAPPLICATION_ALLOCATED_HEAP 1
 #define configTOTAL_HEAP_SIZE			(&_heap_end - &_heap_start)//( ( size_t ) (64 * 1024) )
 
-#define configMAX_TASK_NAME_LEN			( 16 )
+#define configMAX_TASK_NAME_LEN			( CONFIG_FREERTOS_MAX_TASK_NAME_LEN )
 #define configUSE_TRACE_FACILITY		0		/* Used by vTaskList in main.c */
 #define configUSE_STATS_FORMATTING_FUNCTIONS	0	/* Used by vTaskList in main.c */
 #define configUSE_TRACE_FACILITY_2      0		/* Provided by Xtensa port patch */
@@ -231,6 +228,8 @@
 #define INCLUDE_vTaskDelayUntil				1
 #define INCLUDE_vTaskDelay					1
 #define INCLUDE_uxTaskGetStackHighWaterMark	1
+#define INCLUDE_pcTaskGetTaskName			1
+#define INCLUDE_xTaskGetIdleTaskHandle      1
 
 #if CONFIG_ENABLE_MEMORY_DEBUG
 #define configENABLE_MEMORY_DEBUG 1
@@ -251,29 +250,41 @@
 
 #define configUSE_NEWLIB_REENTRANT		1
 
+#define configSUPPORT_DYNAMIC_ALLOCATION    1
+#define configSUPPORT_STATIC_ALLOCATION CONFIG_SUPPORT_STATIC_ALLOCATION
+
+#ifndef __ASSEMBLER__
+#if CONFIG_ENABLE_STATIC_TASK_CLEAN_UP_HOOK
+extern void vPortCleanUpTCB ( void *pxTCB );
+#define portCLEAN_UP_TCB( pxTCB )           vPortCleanUpTCB( pxTCB )
+#endif
+#endif
+
 /* Test FreeRTOS timers (with timer task) and more. */
 /* Some files don't compile if this flag is disabled */
 #define configUSE_TIMERS                    1
-#define configTIMER_TASK_PRIORITY           1
-#define configTIMER_QUEUE_LENGTH            10
-#define configTIMER_TASK_STACK_DEPTH        configMINIMAL_STACK_SIZE
+#define configTIMER_TASK_PRIORITY           CONFIG_TIMER_TASK_PRIORITY
+#define configTIMER_QUEUE_LENGTH            CONFIG_TIMER_QUEUE_LENGTH
+#define configTIMER_TASK_STACK_DEPTH        CONFIG_TIMER_TASK_STACK_DEPTH
 
 #define INCLUDE_xTimerPendFunctionCall      1
 #define INCLUDE_eTaskGetState               1
 #define configUSE_QUEUE_SETS                1
 
-#if (!defined XT_INTEXC_HOOKS)
-#define configXT_INTEXC_HOOKS               1   /* Exception hooks used by certain tests */
-#if configUSE_TRACE_FACILITY_2
-#define configASSERT_2						1	/* Specific to Xtensa port */
-#endif
-#endif
 
 #define configXT_BOARD                      1   /* Board mode */
 #define configXT_SIMULATOR					0
 
+#if CONFIG_ESP32_ENABLE_COREDUMP
+#define configENABLE_TASK_SNAPSHOT			1
+#endif
 
-
+#if CONFIG_SYSVIEW_ENABLE
+#ifndef __ASSEMBLER__
+#include "SEGGER_SYSVIEW_FreeRTOS.h"
+#undef INLINE // to avoid redefinition
+#endif /* def __ASSEMBLER__ */
+#endif
 
 #endif /* FREERTOS_CONFIG_H */
 

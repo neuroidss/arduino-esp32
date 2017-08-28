@@ -45,7 +45,7 @@ extern "C" {
 #endif
 
 /** period (in seconds) of the application calling dhcp_coarse_tmr() */
-#define DHCP_COARSE_TIMER_SECS 60
+#define DHCP_COARSE_TIMER_SECS 1
 /** period (in milliseconds) of the application calling dhcp_coarse_tmr() */
 #define DHCP_COARSE_TIMER_MSECS (DHCP_COARSE_TIMER_SECS * 1000UL)
 /** period (in milliseconds) of the application calling dhcp_fine_tmr() */
@@ -76,12 +76,12 @@ struct dhcp
   struct dhcp_msg *msg_out; /* outgoing msg */
   u16_t options_out_len; /* outgoing msg options length */
   u16_t request_timeout; /* #ticks with period DHCP_FINE_TIMER_SECS for request timeout */
-  u16_t t1_timeout;  /* #ticks with period DHCP_COARSE_TIMER_SECS for renewal time */
-  u16_t t2_timeout;  /* #ticks with period DHCP_COARSE_TIMER_SECS for rebind time */
-  u16_t t1_renew_time;  /* #ticks with period DHCP_COARSE_TIMER_SECS until next renew try */
-  u16_t t2_rebind_time; /* #ticks with period DHCP_COARSE_TIMER_SECS until next rebind try */
-  u16_t lease_used; /* #ticks with period DHCP_COARSE_TIMER_SECS since last received DHCP ack */
-  u16_t t0_timeout; /* #ticks with period DHCP_COARSE_TIMER_SECS for lease time */
+  u32_t t1_timeout;  /* #ticks with period DHCP_COARSE_TIMER_SECS for renewal time */
+  u32_t t2_timeout;  /* #ticks with period DHCP_COARSE_TIMER_SECS for rebind time */
+  u32_t t1_renew_time;  /* #ticks with period DHCP_COARSE_TIMER_SECS until next renew try */
+  u32_t t2_rebind_time; /* #ticks with period DHCP_COARSE_TIMER_SECS until next rebind try */
+  u32_t lease_used; /* #ticks with period DHCP_COARSE_TIMER_SECS since last received DHCP ack */
+  u32_t t0_timeout; /* #ticks with period DHCP_COARSE_TIMER_SECS for lease time */
   ip_addr_t server_ip_addr; /* dhcp server address that offered this lease (ip_addr_t because passed to UDP) */
   ip4_addr_t offered_ip_addr;
   ip4_addr_t offered_sn_mask;
@@ -96,7 +96,11 @@ struct dhcp
 #endif /* LWIP_DHCP_BOOTPFILE */
 
   /* Espressif add start. */
+#ifdef ESP_LWIP
+  void (*cb)(struct netif*); /* callback for dhcp, add a parameter to show dhcp status if needed */
+#else
   void (*cb)(void); /* callback for dhcp, add a parameter to show dhcp status if needed */
+#endif
   /* Espressif add end. */
 };
 
@@ -146,7 +150,11 @@ void dhcp_set_struct(struct netif *netif, struct dhcp *dhcp);
 void dhcp_cleanup(struct netif *netif);
 /* Espressif add start. */
 /** set callback for DHCP */
+#ifdef ESP_LWIP
+void dhcp_set_cb(struct netif *netif, void (*cb)(struct netif*));
+#else
 void dhcp_set_cb(struct netif *netif, void (*cb)(void));
+#endif
 /* Espressif add end. */
 /** start DHCP configuration */
 err_t dhcp_start(struct netif *netif);
@@ -249,7 +257,7 @@ void dhcp_fine_tmr(void);
 #define DHCP_OPTION_NTP 42
 #define DHCP_OPTION_END 255
 
-#ifdef LWIP_ESP8266
+#if ESP_LWIP
 /**add options for support more router by liuHan**/
 #define DHCP_OPTION_DOMAIN_NAME 15
 #define DHCP_OPTION_PRD 31

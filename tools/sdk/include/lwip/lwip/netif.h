@@ -177,7 +177,7 @@ typedef err_t (*netif_mld_mac_filter_fn)(struct netif *netif,
 #endif /* LWIP_IPV6 && LWIP_IPV6_MLD */
 
 
-#ifdef LWIP_ESP8266
+#if ESP_DHCP
 /*add DHCP event processing by LiuHan*/
 typedef void (*dhcp_event_fn)(void);
 #endif
@@ -189,11 +189,6 @@ typedef void (*dhcp_event_fn)(void);
 struct netif {
   /** pointer to next in linked list */
   struct netif *next;
-
-#ifdef LWIP_ESP8266
-//ip_addr_t  is changed   by marco  IPV4, IPV6
-  ip_addr_t link_local_addr;
-#endif
 
 #if LWIP_IPV4
   /** IP address configuration in network byte order */
@@ -207,6 +202,10 @@ struct netif {
   /** The state of each IPv6 address (Tentative, Preferred, etc).
    * @see ip6_addr.h */
   u8_t ip6_addr_state[LWIP_IPV6_NUM_ADDRESSES];
+#if ESP_LWIP
+  void (*ipv6_addr_cb)(struct netif* netif, u8_t ip_idex); /* callback for ipv6 addr states changed */
+#endif
+
 #endif /* LWIP_IPV6 */
   /** This function is called by the network device driver
    *  to pass a packet up the TCP/IP stack. */
@@ -248,7 +247,7 @@ struct netif {
   /** the DHCP client state information for this netif */
   struct dhcp *dhcp;
 
-#ifdef LWIP_ESP8266
+#if ESP_LWIP
   struct udp_pcb *dhcps_pcb;	
   dhcp_event_fn dhcp_event;
 #endif  
@@ -331,6 +330,10 @@ struct netif {
   u16_t loop_cnt_current;
 #endif /* LWIP_LOOPBACK_MAX_PBUFS */
 #endif /* ENABLE_LOOPBACK */
+
+#if ESP_LWIP
+  void (*l2_buffer_free_notify)(void *user_buf); /* Allows LWIP to notify driver when a L2-supplied pbuf can be freed */
+#endif
 };
 
 #if LWIP_CHECKSUM_CTRL_PER_NETIF
@@ -382,7 +385,7 @@ void netif_set_gw(struct netif *netif, const ip4_addr_t *gw);
 void netif_set_up(struct netif *netif);
 void netif_set_down(struct netif *netif);
 /** Ask if an interface is up */
-#define netif_is_up(netif) (((netif)->flags & NETIF_FLAG_UP) ? (u8_t)1 : (u8_t)0)
+#define netif_is_up(netif) ( ((netif) && ((netif)->flags & NETIF_FLAG_UP)) ? (u8_t)1 : (u8_t)0)
 
 #if LWIP_NETIF_STATUS_CALLBACK
 void netif_set_status_callback(struct netif *netif, netif_status_callback_fn status_callback);

@@ -1,39 +1,28 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "Arduino.h"
 
-void initVariant() __attribute__((weak));
-void initVariant() {}
+#if CONFIG_AUTOSTART_ARDUINO
 
-void init() __attribute__((weak));
-void init() {}
-
-void startWiFi() __attribute__((weak));
-void startWiFi() {}
-
-void initWiFi() __attribute__((weak));
-void initWiFi() {}
-
-extern void loop();
-extern void setup();
+#if CONFIG_FREERTOS_UNICORE
+#define ARDUINO_RUNNING_CORE 0
+#else
+#define ARDUINO_RUNNING_CORE 1
+#endif
 
 void loopTask(void *pvParameters)
 {
-    bool setup_done = false;
+    setup();
     for(;;) {
-        if(!setup_done) {
-            startWiFi();
-            setup();
-            setup_done = true;
-        }
+        micros(); //update overflow
         loop();
     }
 }
 
 extern "C" void app_main()
 {
-    init();
-    initVariant();
-    initWiFi();
-    xTaskCreatePinnedToCore(loopTask, "loopTask", 4096, NULL, 1, NULL, 1);
+    initArduino();
+    xTaskCreatePinnedToCore(loopTask, "loopTask", 8192, NULL, 1, NULL, ARDUINO_RUNNING_CORE);
 }
 
+#endif

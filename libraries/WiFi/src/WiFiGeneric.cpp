@@ -32,24 +32,89 @@ extern "C" {
 #include <stdlib.h>
 #include <inttypes.h>
 #include <string.h>
+
 #include <esp_err.h>
 #include <esp_wifi.h>
 #include <esp_event_loop.h>
-#include <lwip/ip_addr.h>
-
+#include "lwip/ip_addr.h"
 #include "lwip/opt.h"
 #include "lwip/err.h"
 #include "lwip/dns.h"
+#include "esp_ipc.h"
+
+
+} //extern "C"
 
 #include "esp32-hal-log.h"
-}
-
-//#include "WiFiClient.h"
-//#include "WiFiUdp.h"
 
 #undef min
 #undef max
 #include <vector>
+
+void tcpipInit(){
+    static bool initialized = false;
+    if(!initialized){
+        initialized = true;
+        tcpip_adapter_init();
+        esp_event_loop_init(&WiFiGenericClass::_eventCallback, NULL);
+    }
+}
+
+static bool wifiLowLevelInit(){
+    static bool lowLevelInitDone = false;
+    if(!lowLevelInitDone){
+        tcpipInit();
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        esp_err_t err = esp_wifi_init(&cfg);
+        if(err){
+            log_e("esp_wifi_init %d", err);
+            return false;
+        }
+        esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+        esp_wifi_set_mode(WIFI_MODE_NULL);
+        lowLevelInitDone = true;
+    }
+    return true;
+}
+
+static bool wifiLowLevelDeinit(){
+    //deinit not working yet!
+    //esp_wifi_deinit();
+    return true;
+}
+
+static bool _esp_wifi_started = false;
+
+static bool espWiFiStart(){
+    if(_esp_wifi_started){
+        return true;
+    }
+    if(!wifiLowLevelInit()){
+        return false;
+    }
+    esp_err_t err = esp_wifi_start();
+    if (err != ESP_OK) {
+        log_e("esp_wifi_start %d", err);
+        wifiLowLevelDeinit();
+        return false;
+    }
+    _esp_wifi_started = true;
+    return true;
+}
+
+static bool espWiFiStop(){
+    esp_err_t err;
+    if(!_esp_wifi_started){
+        return true;
+    }
+    err = esp_wifi_stop();
+    if(err){
+        log_e("Could not stop WiFi! %u", err);
+        return false;
+    }
+    _esp_wifi_started = false;
+    return wifiLowLevelDeinit();
+}
 
 // -----------------------------------------------------------------------------------------------------------------------
 // ------------------------------------------------- Generic WiFi function -----------------------------------------------
@@ -105,24 +170,34 @@ void WiFiGenericClass::removeEvent(WiFiEventCb cbEvent, system_event_id_t event)
  * callback for WiFi events
  * @param arg
  */
+#if ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_DEBUG
+const char * system_event_names[] = { "WIFI_READY", "SCAN_DONE", "STA_START", "STA_STOP", "STA_CONNECTED", "STA_DISCONNECTED", "STA_AUTHMODE_CHANGE", "STA_GOT_IP", "STA_WPS_ER_SUCCESS", "STA_WPS_ER_FAILED", "STA_WPS_ER_TIMEOUT", "STA_WPS_ER_PIN", "AP_START", "AP_STOP", "AP_STACONNECTED", "AP_STADISCONNECTED", "AP_PROBEREQRECVED", "AP_STA_GOT_IP6", "ETH_START", "ETH_STOP", "ETH_CONNECTED", "ETH_DISCONNECTED", "ETH_GOT_IP", "MAX"};
+#endif
+#if ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_WARN
+const char * system_event_reasons[] = { "UNSPECIFIED", "AUTH_EXPIRE", "AUTH_LEAVE", "ASSOC_EXPIRE", "ASSOC_TOOMANY", "NOT_AUTHED", "NOT_ASSOCED", "ASSOC_LEAVE", "ASSOC_NOT_AUTHED", "DISASSOC_PWRCAP_BAD", "DISASSOC_SUPCHAN_BAD", "IE_INVALID", "MIC_FAILURE", "4WAY_HANDSHAKE_TIMEOUT", "GROUP_KEY_UPDATE_TIMEOUT", "IE_IN_4WAY_DIFFERS", "GROUP_CIPHER_INVALID", "PAIRWISE_CIPHER_INVALID", "AKMP_INVALID", "UNSUPP_RSN_IE_VERSION", "INVALID_RSN_IE_CAP", "802_1X_AUTH_FAILED", "CIPHER_SUITE_REJECTED", "BEACON_TIMEOUT", "NO_AP_FOUND", "AUTH_FAIL", "ASSOC_FAIL", "HANDSHAKE_TIMEOUT" };
+#define reason2str(r) ((r>176)?system_event_reasons[r-176]:system_event_reasons[r-1])
+#endif
 esp_err_t WiFiGenericClass::_eventCallback(void *arg, system_event_t *event)
 {
-    log_d("wifi evt: %d", event->event_id);
-
+    log_d("Event: %d - %s", event->event_id, system_event_names[event->event_id]);
     if(event->event_id == SYSTEM_EVENT_SCAN_DONE) {
         WiFiScanClass::_scanDone();
     } else if(event->event_id == SYSTEM_EVENT_STA_DISCONNECTED) {
         uint8_t reason = event->event_info.disconnected.reason;
+        log_w("Reason: %u - %s", reason, reason2str(reason));
         if(reason == WIFI_REASON_NO_AP_FOUND) {
             WiFiSTAClass::_setStatus(WL_NO_SSID_AVAIL);
         } else if(reason == WIFI_REASON_AUTH_FAIL || reason == WIFI_REASON_ASSOC_FAIL) {
             WiFiSTAClass::_setStatus(WL_CONNECT_FAILED);
         } else if(reason == WIFI_REASON_BEACON_TIMEOUT || reason == WIFI_REASON_HANDSHAKE_TIMEOUT) {
             WiFiSTAClass::_setStatus(WL_CONNECTION_LOST);
+        } else if(reason == WIFI_REASON_AUTH_EXPIRE) {
+            if(WiFi.getAutoReconnect()){
+                WiFi.begin();
+            }
         } else {
             WiFiSTAClass::_setStatus(WL_DISCONNECTED);
         }
-        log_d("wifi reason: %d", reason);
     } else if(event->event_id == SYSTEM_EVENT_STA_START) {
         WiFiSTAClass::_setStatus(WL_DISCONNECTED);
     } else if(event->event_id == SYSTEM_EVENT_STA_STOP) {
@@ -171,10 +246,23 @@ void WiFiGenericClass::persistent(bool persistent)
  */
 bool WiFiGenericClass::mode(wifi_mode_t m)
 {
-    if(getMode() == m) {
+    wifi_mode_t cm = getMode();
+    if(cm == WIFI_MODE_MAX){
+        return false;
+    }
+    if(cm == m) {
         return true;
     }
-    return esp_wifi_set_mode(m) == ESP_OK;
+    esp_err_t err;
+    err = esp_wifi_set_mode(m);
+    if(err){
+        log_e("Could not set mode! %u", err);
+        return false;
+    }
+    if(m){
+        return espWiFiStart();
+    }
+    return espWiFiStop();
 }
 
 /**
@@ -183,6 +271,9 @@ bool WiFiGenericClass::mode(wifi_mode_t m)
  */
 wifi_mode_t WiFiGenericClass::getMode()
 {
+    if(!wifiLowLevelInit()){
+        return WIFI_MODE_MAX;
+    }
     uint8_t mode;
     esp_wifi_get_mode((wifi_mode_t*)&mode);
     return (wifi_mode_t)mode;
@@ -237,33 +328,7 @@ bool WiFiGenericClass::enableAP(bool enable)
 // ------------------------------------------------ Generic Network function ---------------------------------------------
 // -----------------------------------------------------------------------------------------------------------------------
 
-void wifi_dns_found_callback(const char *name, const ip_addr_t *ipaddr, void *callback_arg);
-
-/**
- * Resolve the given hostname to an IP address.
- * @param aHostname     Name to be resolved
- * @param aResult       IPAddress structure to store the returned IP address
- * @return 1 if aIPAddrString was successfully converted to an IP address,
- *          else error code
- */
 static bool _dns_busy = false;
-
-int WiFiGenericClass::hostByName(const char* aHostname, IPAddress& aResult)
-{
-    ip_addr_t addr;
-    aResult = static_cast<uint32_t>(0);
-    err_t err = dns_gethostbyname(aHostname, &addr, &wifi_dns_found_callback, &aResult);
-    _dns_busy = err == ERR_INPROGRESS;
-    while(_dns_busy);
-    if(err == ERR_INPROGRESS && aResult) {
-        //found by search
-    } else if(err == ERR_OK && addr.u_addr.ip4.addr) {
-        aResult = addr.u_addr.ip4.addr;
-    } else {
-        return 0;
-    }
-    return 1;
-}
 
 /**
  * DNS callback
@@ -271,7 +336,7 @@ int WiFiGenericClass::hostByName(const char* aHostname, IPAddress& aResult)
  * @param ipaddr
  * @param callback_arg
  */
-void wifi_dns_found_callback(const char *name, const ip_addr_t *ipaddr, void *callback_arg)
+static void wifi_dns_found_callback(const char *name, const ip_addr_t *ipaddr, void *callback_arg)
 {
     if(ipaddr) {
         (*reinterpret_cast<IPAddress*>(callback_arg)) = ipaddr->u_addr.ip4.addr;
@@ -280,46 +345,30 @@ void wifi_dns_found_callback(const char *name, const ip_addr_t *ipaddr, void *ca
 }
 
 /**
- * Boot and start WiFi
- * This method get's called on boot if you use any of the WiFi methods.
- * If you do not link to this library, WiFi will not be started.
- * */
-#include "nvs_flash.h"
-
-void initWiFi()
+ * Resolve the given hostname to an IP address.
+ * @param aHostname     Name to be resolved
+ * @param aResult       IPAddress structure to store the returned IP address
+ * @return 1 if aIPAddrString was successfully converted to an IP address,
+ *          else error code
+ */
+int WiFiGenericClass::hostByName(const char* aHostname, IPAddress& aResult)
 {
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    nvs_flash_init();
-    system_init();
-    tcpip_adapter_init();
-    esp_event_loop_init(WiFiGenericClass::_eventCallback, NULL);
-    esp_wifi_init(&cfg);
-}
+    ip_addr_t addr;
+    aResult = static_cast<uint32_t>(0);
 
-void startWiFi()
-{
-    esp_err_t err;
-    wifi_mode_t mode = WIFI_MODE_NULL;
-    bool auto_connect = false;
-
-    err = esp_wifi_start();
-    if (err != ESP_OK) {
-        log_e("esp_wifi_start fail %d\n", err);
-        return;
-    }
-
-    err = esp_wifi_get_mode(&mode);
-    if (err != ESP_OK) {
-        log_e("esp_wifi_get_mode fail %d\n", err);
-        return;
-    }
-
-    err = esp_wifi_get_auto_connect(&auto_connect);
-    if ((mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA) && auto_connect) {
-        err = esp_wifi_connect();
-        if (err != ESP_OK) {
-            log_e("esp_wifi_connect fail %d\n", err);
+    _dns_busy = true;
+    err_t err = dns_gethostbyname(aHostname, &addr, &wifi_dns_found_callback, &aResult);
+    if(err == ERR_OK && addr.u_addr.ip4.addr) {
+        aResult = addr.u_addr.ip4.addr;
+        _dns_busy = false;
+    } else if(err == ERR_INPROGRESS) {
+        while(_dns_busy){
+            delay(1);
         }
+    } else {
+        _dns_busy = false;
+        return 0;
     }
+    return 1;
 }
 

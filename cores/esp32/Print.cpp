@@ -29,7 +29,7 @@
 
 #include "Print.h"
 extern "C" {
-//#include "esp_common.h"
+    #include "time.h"
 }
 
 // Public Methods //////////////////////////////////////////////////////////////
@@ -46,33 +46,34 @@ size_t Print::write(const uint8_t *buffer, size_t size)
 
 size_t Print::printf(const char *format, ...)
 {
-    char * temp;
+    char loc_buf[64];
+    char * temp = loc_buf;
     va_list arg;
+    va_list copy;
     va_start(arg, format);
+    va_copy(copy, arg);
     size_t len = vsnprintf(NULL, 0, format, arg);
-    temp = new char[len+1];
-    if(temp == NULL) {
-        return 0;
+    va_end(copy);
+    if(len >= sizeof(loc_buf)){
+        temp = new char[len+1];
+        if(temp == NULL) {
+            return 0;
+        }
     }
     len = vsnprintf(temp, len+1, format, arg);
     write((uint8_t*)temp, len);
     va_end(arg);
-    delete[] temp;
+    if(len > 64){
+        delete[] temp;
+    }
     return len;
 }
-/*
-size_t Print::print(const __FlashStringHelper *ifsh) {
-    PGM_P p = reinterpret_cast<PGM_P>(ifsh);
 
-    size_t n = 0;
-    while (1) {
-        uint8_t c = pgm_read_byte(p++);
-        if (c == 0) break;
-        n += write(c);
-    }
-    return n;
+size_t Print::print(const __FlashStringHelper *ifsh)
+{
+    return print(reinterpret_cast<const char *>(ifsh));
 }
-*/
+
 size_t Print::print(const String &s)
 {
     return write(s.c_str(), s.length());
@@ -132,17 +133,29 @@ size_t Print::print(double n, int digits)
 {
     return printFloat(n, digits);
 }
-/*
+
 size_t Print::println(const __FlashStringHelper *ifsh)
 {
     size_t n = print(ifsh);
     n += println();
     return n;
 }
-*/
+
 size_t Print::print(const Printable& x)
 {
     return x.printTo(*this);
+}
+
+size_t Print::print(struct tm * timeinfo, const char * format)
+{
+    const char * f = format;
+    if(!f){
+        f = "%c";
+    }
+    char buf[64];
+    size_t written = strftime(buf, 64, f, timeinfo);
+    print(buf);
+    return written;
 }
 
 size_t Print::println(void)
@@ -216,6 +229,13 @@ size_t Print::println(double num, int digits)
 size_t Print::println(const Printable& x)
 {
     size_t n = print(x);
+    n += println();
+    return n;
+}
+
+size_t Print::println(struct tm * timeinfo, const char * format)
+{
+    size_t n = print(timeinfo, format);
     n += println();
     return n;
 }

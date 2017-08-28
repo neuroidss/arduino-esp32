@@ -18,25 +18,30 @@
 extern "C" {
 #endif
 
-/** Initialise NVS flash storage with default flash sector layout
+#include "nvs.h"
 
-    Temporarily, this region is hardcoded as a 12KB (0x3000 byte)
-    region starting at 24KB (0x6000 byte) offset in flash.
-*/
+/**
+ * @brief Initialize NVS flash storage with layout given in the partition table.
+ *
+ * @return
+ *      - ESP_OK if storage was successfully initialized.
+ *      - ESP_ERR_NVS_NO_FREE_PAGES if the NVS storage contains no empty pages
+ *        (which may happen if NVS partition was truncated)
+ *      - one of the error codes from the underlying flash storage driver
+ */
 esp_err_t nvs_flash_init(void);
 
-/** Initialise NVS flash storage with custom flash sector layout
 
-    @param baseSector Flash sector (units of 4096 bytes) offset to start NVS.
-    @param sectorCount Length (in flash sectors) of NVS region.
-
-    @return ESP_OK if flash was successfully initialised.
-
-    @note Use this parameter if you're not using the options in menuconfig for
-          configuring flash layout & partition table.
-*/
-esp_err_t nvs_flash_init_custom(uint32_t baseSector, uint32_t sectorCount);
-
+/**
+ * @brief Erase NVS partition
+ *
+ * This function erases all contents of NVS partition
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_NOT_FOUND if there is no NVS partition in the partition table
+ */
+esp_err_t nvs_flash_erase(void);
 
 #ifdef __cplusplus
 }

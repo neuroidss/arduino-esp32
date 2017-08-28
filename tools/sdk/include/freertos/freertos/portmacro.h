@@ -79,6 +79,8 @@ extern "C" {
 #include <xtensa/config/core.h>
 #include <xtensa/config/system.h>	/* required for XSHAL_CLIB */
 #include <xtensa/xtruntime.h>
+#include "esp_crosscore_int.h"
+
 
 //#include "xtensa_context.h"
 
@@ -170,6 +172,7 @@ typedef struct {
 #define portASSERT_IF_IN_ISR()        vPortAssertIfInISR()
 void vPortAssertIfInISR();
 
+
 #define portCRITICAL_NESTING_IN_TCB 1 
 
 /*
@@ -191,6 +194,10 @@ do not disable the interrupts (because they already are).
 
 This all assumes that interrupts are either entirely disabled or enabled. Interrupr priority levels
 will break this scheme.
+
+Remark: For the ESP32, portENTER_CRITICAL and portENTER_CRITICAL_ISR both alias vTaskEnterCritical, meaning
+that either function can be called both from ISR as well as task context. This is not standard FreeRTOS 
+behaviour; please keep this in mind if you need any compatibility with other FreeRTOS implementations.
 */
 void vPortCPUInitializeMutex(portMUX_TYPE *mux);
 #ifdef CONFIG_FREERTOS_PORTMUX_DEBUG
@@ -200,8 +207,8 @@ void vTaskEnterCritical( portMUX_TYPE *mux, const char *function, int line );
 void vTaskExitCritical( portMUX_TYPE *mux, const char *function, int line );
 #define portENTER_CRITICAL(mux)        vTaskEnterCritical(mux, __FUNCTION__, __LINE__)
 #define portEXIT_CRITICAL(mux)         vTaskExitCritical(mux, __FUNCTION__, __LINE__)
-#define portENTER_CRITICAL_ISR(mux)    vPortCPUAcquireMutex(mux, __FUNCTION__, __LINE__)
-#define portEXIT_CRITICAL_ISR(mux)    vPortCPUReleaseMutex(mux, __FUNCTION__, __LINE__)
+#define portENTER_CRITICAL_ISR(mux)    vTaskEnterCritical(mux, __FUNCTION__, __LINE__)
+#define portEXIT_CRITICAL_ISR(mux)     vTaskExitCritical(mux, __FUNCTION__, __LINE__)
 #else
 void vTaskExitCritical( portMUX_TYPE *mux );
 void vTaskEnterCritical( portMUX_TYPE *mux );
@@ -209,20 +216,40 @@ void vPortCPUAcquireMutex(portMUX_TYPE *mux);
 portBASE_TYPE vPortCPUReleaseMutex(portMUX_TYPE *mux);
 #define portENTER_CRITICAL(mux)        vTaskEnterCritical(mux)
 #define portEXIT_CRITICAL(mux)         vTaskExitCritical(mux)
-#define portENTER_CRITICAL_ISR(mux)    vPortCPUAcquireMutex(mux)
-#define portEXIT_CRITICAL_ISR(mux)    vPortCPUReleaseMutex(mux)
+#define portENTER_CRITICAL_ISR(mux)    vTaskEnterCritical(mux)
+#define portEXIT_CRITICAL_ISR(mux)     vTaskExitCritical(mux)
 #endif
-
 
 // Cleaner and preferred solution allows nested interrupts disabling and restoring via local registers or stack.
 // They can be called from interrupts too.
-//NOT SMP-COMPATIBLE! Use only if all you want is to disable the interrupts locally!
+// WARNING: This ONLY disables interrupt on the current CPU, meaning they cannot be used as a replacement for the vTaskExitCritical spinlock
+// on a multicore system. Only use if disabling interrupts on the current CPU only is indeed what you want.
 static inline unsigned portENTER_CRITICAL_NESTED() { unsigned state = XTOS_SET_INTLEVEL(XCHAL_EXCM_LEVEL); portbenchmarkINTERRUPT_DISABLE(); return state; }
 #define portEXIT_CRITICAL_NESTED(state)   do { portbenchmarkINTERRUPT_RESTORE(state); XTOS_RESTORE_JUST_INTLEVEL(state); } while (0)
 
 // These FreeRTOS versions are similar to the nested versions above
 #define portSET_INTERRUPT_MASK_FROM_ISR()            portENTER_CRITICAL_NESTED()
 #define portCLEAR_INTERRUPT_MASK_FROM_ISR(state)     portEXIT_CRITICAL_NESTED(state)
+
+
+/*
+ * Wrapper for the Xtensa compare-and-set instruction. This subroutine will atomically compare
+ * *mux to compare, and if it's the same, will set *mux to set. It will return the old value
+ * of *addr in *set.
+ *
+ * Warning: From the ISA docs: in some (unspecified) cases, the s32c1i instruction may return the
+ * *bitwise inverse* of the old mem if the mem wasn't written. This doesn't seem to happen on the
+ * ESP32, though. (Would show up directly if it did because the magic wouldn't match.)
+ */
+static inline void uxPortCompareSet(volatile uint32_t *addr, uint32_t compare, uint32_t *set) {
+    __asm__ __volatile__(
+        "WSR 	    %2,SCOMPARE1 \n"
+        "ISYNC      \n"
+        "S32C1I     %0, %1, 0	 \n"
+        :"=r"(*set)
+        :"r"(addr), "r"(compare), "0"(*set)
+        );
+}
 
 
 /*-----------------------------------------------------------*/
@@ -241,7 +268,19 @@ static inline unsigned portENTER_CRITICAL_NESTED() { unsigned state = XTOS_SET_I
 void vPortYield( void );
 void _frxt_setup_switch( void );
 #define portYIELD()					vPortYield()
-#define portYIELD_FROM_ISR()		_frxt_setup_switch()
+#define portYIELD_FROM_ISR()        {traceISR_EXIT_TO_SCHEDULER(); _frxt_setup_switch();}
+
+static inline uint32_t xPortGetCoreID();
+
+/* Yielding within an API call (when interrupts are off), means the yield should be delayed
+   until interrupts are re-enabled.
+
+   To do this, we use the "cross-core" interrupt as a trigger to yield on this core when interrupts are re-enabled.This
+   is the same interrupt & code path which is used to trigger a yield between CPUs, although in this case the yield is
+   happening on the same CPU.
+*/
+#define portYIELD_WITHIN_API() esp_crosscore_int_send_yield(xPortGetCoreID())
+
 /*-----------------------------------------------------------*/
 
 /* Task function macros as described on the FreeRTOS.org WEB site. */
@@ -279,6 +318,10 @@ typedef struct {
 	#define PRIVILEGED_FUNCTION
 	#define PRIVILEGED_DATA
 #endif
+
+
+void _xt_coproc_release(volatile void * coproc_sa_base);
+
 
 // porttrace
 #if configUSE_TRACE_FACILITY_2

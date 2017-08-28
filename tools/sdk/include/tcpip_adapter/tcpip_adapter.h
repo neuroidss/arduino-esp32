@@ -58,20 +58,39 @@ extern "C" {
 
 #define IPSTR "%d.%d.%d.%d"
 
+#define IPV62STR(ipaddr) IP6_ADDR_BLOCK1(&(ipaddr)),     \
+    IP6_ADDR_BLOCK2(&(ipaddr)),     \
+    IP6_ADDR_BLOCK3(&(ipaddr)),     \
+    IP6_ADDR_BLOCK4(&(ipaddr)),     \
+    IP6_ADDR_BLOCK5(&(ipaddr)),     \
+    IP6_ADDR_BLOCK6(&(ipaddr)),     \
+    IP6_ADDR_BLOCK7(&(ipaddr)),     \
+    IP6_ADDR_BLOCK8(&(ipaddr))
+
+#define IPV6STR "%04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x"
+
 typedef struct {
     ip4_addr_t ip;
     ip4_addr_t netmask;
     ip4_addr_t gw;
 } tcpip_adapter_ip_info_t;
 
+typedef struct {
+    ip6_addr_t ip;
+} tcpip_adapter_ip6_info_t;
+
 typedef dhcps_lease_t tcpip_adapter_dhcps_lease_t;
 
 #if CONFIG_DHCP_STA_LIST 
-struct station_list {
-    STAILQ_ENTRY(station_list) next;
+typedef struct {
     uint8_t mac[6];
     ip4_addr_t ip;
-};
+} tcpip_adapter_sta_info_t;
+
+typedef struct {
+    tcpip_adapter_sta_info_t sta[ESP_WIFI_MAX_CONN_NUM];
+    int num;
+} tcpip_adapter_sta_list_t;
 #endif
 
 #endif
@@ -90,6 +109,7 @@ struct station_list {
 typedef enum {
     TCPIP_ADAPTER_IF_STA = 0,     /**< ESP32 station interface */
     TCPIP_ADAPTER_IF_AP,          /**< ESP32 soft-AP interface */
+    TCPIP_ADAPTER_IF_ETH,         /**< ESP32 ethernet interface */
     TCPIP_ADAPTER_IF_MAX
 } tcpip_adapter_if_t;
 
@@ -116,8 +136,41 @@ typedef enum{
     TCPIP_ADAPTER_IP_REQUEST_RETRY_TIME         = 52,   /**< request IP address retry counter */
 } tcpip_adapter_option_id_t;
 
+struct tcpip_adapter_api_msg_s;
+typedef int (*tcpip_adapter_api_fn)(struct tcpip_adapter_api_msg_s *msg);
+typedef struct tcpip_adapter_api_msg_s {
+    int type;  /**< The first field MUST be int */
+    int ret;
+    tcpip_adapter_api_fn api_fn;
+    tcpip_adapter_if_t tcpip_if;
+    tcpip_adapter_ip_info_t *ip_info;
+    uint8_t *mac;
+    const char *hostname;
+} tcpip_adapter_api_msg_t;
+
+#define TCPIP_ADAPTER_TRHEAD_SAFE 1
+#define TCPIP_ADAPTER_IPC_LOCAL   0 
+#define TCPIP_ADAPTER_IPC_REMOTE  1
+
+#define TCPIP_ADAPTER_IPC_CALL(_if, _mac, _ip, _hostname, _fn) do {\
+    tcpip_adapter_api_msg_t msg;\
+    memset(&msg, 0, sizeof(msg));\
+    msg.tcpip_if = (_if);\
+    msg.mac      = (_mac);\
+    msg.ip_info  = (_ip);\
+    msg.hostname = (_hostname);\
+    msg.api_fn   = (_fn);\
+    if (TCPIP_ADAPTER_IPC_REMOTE == tcpip_adapter_ipc_check(&msg)) {\
+        ESP_LOGD(TAG, "check: remote, if=%d fn=%p\n", (_if), (_fn));\
+        return msg.ret;\
+    } else {\
+        ESP_LOGD(TAG, "check: local, if=%d fn=%p\n", (_if), (_fn));\
+    }\
+}while(0)
+
+
 /**
- * @brief  Initialize tcpip adpater
+ * @brief  Initialize tcpip adapter
  *
  * This will initialize TCPIP stack inside.
  */
@@ -206,6 +259,35 @@ esp_err_t tcpip_adapter_get_ip_info(tcpip_adapter_if_t tcpip_if, tcpip_adapter_i
  *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
  */
 esp_err_t tcpip_adapter_set_ip_info(tcpip_adapter_if_t tcpip_if, tcpip_adapter_ip_info_t *ip_info);
+
+/**
+ * @brief  create interface's linklocal IPv6 information
+ *
+ * @note this function will create a linklocal IPv6 address about input interface,
+ *       if this address status changed to preferred, will call event call back ,
+ *       notify user linklocal IPv6 address has been verified
+ *
+ * @param[in]  tcpip_if: the interface which we want to set IP information
+ *
+ *
+ * @return ESP_OK
+ *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ */
+esp_err_t tcpip_adapter_create_ip6_linklocal(tcpip_adapter_if_t tcpip_if);
+
+/**
+ * @brief  get interface's linkloacl IPv6 information
+ *
+ * There has an IPv6 information copy in adapter library, if interface is up,and IPv6 info
+ * is preferred,it will get IPv6 linklocal IP successfully
+ *
+ * @param[in]  tcpip_if: the interface which we want to set IP information
+ * @param[in]  if_ip6: If successful, IPv6 information will be returned in this argument.
+ *
+ * @return ESP_OK
+ *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
+ */
+esp_err_t tcpip_adapter_get_ip6_linklocal(tcpip_adapter_if_t tcpip_if, ip6_addr_t *if_ip6);
 
 #if 0
 esp_err_t tcpip_adapter_get_mac(tcpip_adapter_if_t tcpip_if, uint8_t *mac);
@@ -317,6 +399,10 @@ esp_err_t tcpip_adapter_dhcpc_start(tcpip_adapter_if_t tcpip_if);
  */
 esp_err_t tcpip_adapter_dhcpc_stop(tcpip_adapter_if_t tcpip_if);
 
+
+
+esp_err_t tcpip_adapter_eth_input(void *buffer, uint16_t len, void *eb);
+
 /**
  * @brief  Get data from station interface
  *
@@ -350,35 +436,49 @@ esp_err_t tcpip_adapter_ap_input(void *buffer, uint16_t len, void *eb);
  *
  * @param[in]  void *dev: adapter interface
  *
- * @return WIFI_IF_STA
- *         WIFI_IF_AP
- *         WIFI_IF_MAX
+ * @return ESP_IF_WIFI_STA
+ *         ESP_IF_WIFI_AP
+           ESP_IF_ETH
+ *         ESP_IF_MAX
  */
-wifi_interface_t tcpip_adapter_get_wifi_if(void *dev);
+esp_interface_t tcpip_adapter_get_esp_if(void *dev);
 
 /**
  * @brief  Get the station information list
  *
- * @note   This function should be called in AP mode and dhcp server started, and the list should
- *         be by using tcpip_adapter_free_sta_list.
- *
- * @param[in]   sta_info: station information
- * @param[out]  sta_list: station information list
+ * @param[in]   wifi_sta_list_t *wifi_sta_list: station list info
+ * @param[out]  tcpip_adapter_sta_list_t *tcpip_sta_list: station list info
  *
  * @return ESP_OK
  *         ESP_ERR_TCPIP_ADAPTER_NO_MEM
  *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS
  */
-esp_err_t tcpip_adapter_get_sta_list(struct station_info *sta_info, struct station_list **sta_list);
+esp_err_t tcpip_adapter_get_sta_list(wifi_sta_list_t *wifi_sta_list, tcpip_adapter_sta_list_t *tcpip_sta_list);
+
+#define TCPIP_HOSTNAME_MAX_SIZE    32
+/**
+ * @brief  Set the hostname to the interface
+ *
+ * @param[in]   tcpip_if: the interface which we will set the hostname
+ * @param[in]   hostname: the host name for set the interface, the max length of hostname is 32 bytes
+ *
+ * @return ESP_OK:success
+ *         ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY:interface status error
+ *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS:parameter error
+ */
+esp_err_t tcpip_adapter_set_hostname(tcpip_adapter_if_t tcpip_if, const char *hostname);
 
 /**
- * @brief Free the station information list's memory
+ * @brief  Get the hostname from the interface
  *
- * @param  sta_list: station information list
+ * @param[in]   tcpip_if: the interface which we will get the hostname
+ * @param[in]   hostname: the host name from the interface
  *
- * @return ESP_OK
+ * @return ESP_OK:success
+ *         ESP_ERR_TCPIP_ADAPTER_IF_NOT_READY:interface status error
+ *         ESP_ERR_TCPIP_ADAPTER_INVALID_PARAMS:parameter error
  */
-esp_err_t tcpip_adapter_free_sta_list(struct station_list *sta_list);
+esp_err_t tcpip_adapter_get_hostname(tcpip_adapter_if_t tcpip_if, const char **hostname);
 
 #ifdef __cplusplus
 }

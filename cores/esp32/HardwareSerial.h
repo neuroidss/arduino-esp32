@@ -46,6 +46,10 @@ public:
     size_t write(uint8_t);
     size_t write(const uint8_t *buffer, size_t size);
 
+    inline size_t write(const char * s)
+    {
+        return write((uint8_t*) s, strlen(s));
+    }
     inline size_t write(unsigned long n)
     {
         return write((uint8_t) n);
@@ -65,8 +69,6 @@ public:
     operator bool() const;
 
     void setDebugOutput(bool);
-    bool isTxEnabled(void);
-    bool isRxEnabled(void);
 
 protected:
     int _uart_nr;

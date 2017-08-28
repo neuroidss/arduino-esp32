@@ -129,14 +129,14 @@ typedef err_t (*tcp_connected_fn)(void *arg, struct tcp_pcb *tpcb, err_t err);
 #define RCV_WND_SCALE(pcb, wnd) (((wnd) >> (pcb)->rcv_scale))
 #define SND_WND_SCALE(pcb, wnd) (((wnd) << (pcb)->snd_scale))
 #define TCPWND16(x)             ((u16_t)LWIP_MIN((x), 0xFFFF))
-#define TCP_WND_MAX(pcb)        ((tcpwnd_size_t)(((pcb)->flags & TF_WND_SCALE) ? TCP_WND : TCPWND16(TCP_WND)))
+#define TCP_WND_MAX(pcb)        ((tcpwnd_size_t)(((pcb)->flags & TF_WND_SCALE) ? TCP_WND(pcb) : TCPWND16(TCP_WND(pcb))))
 typedef u32_t tcpwnd_size_t;
 typedef u16_t tcpflags_t;
 #else
 #define RCV_WND_SCALE(pcb, wnd) (wnd)
 #define SND_WND_SCALE(pcb, wnd) (wnd)
 #define TCPWND16(x)             (x)
-#define TCP_WND_MAX(pcb)        TCP_WND
+#define TCP_WND_MAX(pcb)        TCP_WND(pcb)
 typedef u16_t tcpwnd_size_t;
 typedef u8_t tcpflags_t;
 #endif
@@ -236,6 +236,11 @@ struct tcp_pcb {
   u8_t dupacks;
   u32_t lastack; /* Highest acknowledged seqno. */
 
+#if ESP_PER_SOC_TCP_WND
+  tcpwnd_size_t per_soc_tcp_wnd; /* per tcp socket tcp window size */
+  tcpwnd_size_t per_soc_tcp_snd_buf; /* per tcp socket tcp send buffer size */
+#endif
+
   /* congestion avoidance/control variables */
   tcpwnd_size_t cwnd;
   tcpwnd_size_t ssthresh;
@@ -305,7 +310,28 @@ struct tcp_pcb {
   u8_t snd_scale;
   u8_t rcv_scale;
 #endif
+
+#if ESP_STATS_TCP
+#define ESP_STATS_TCP_ARRAY_SIZE 20
+  u16_t retry_cnt[TCP_MAXRTX];
+  u16_t rto_cnt[ESP_STATS_TCP_ARRAY_SIZE];
+#endif
 };
+
+#if ESP_STATS_TCP
+#define ESP_STATS_TCP_PCB(_pcb) do {\
+  if ((_pcb)->unacked) {\
+    (_pcb)->retry_cnt[(_pcb)->nrtx]++;\
+    if ((_pcb)->rto < ESP_STATS_TCP_ARRAY_SIZE) {\
+      (_pcb)->rto_cnt[(_pcb)->rto]++;\
+    } else {\
+      (_pcb)->rto_cnt[ESP_STATS_TCP_ARRAY_SIZE-1] ++;\
+    }\
+  }\
+} while(0)
+#else
+#define ESP_STATS_TCP_PCB(pcb) 
+#endif
 
 struct tcp_pcb_listen {
 /* Common members of all PCB types */
@@ -401,6 +427,10 @@ const char* tcp_debug_state_str(enum tcp_state s);
 
 /* for compatibility with older implementation */
 #define tcp_new_ip6() tcp_new_ip_type(IPADDR_TYPE_V6)
+
+#if ESP_PER_SOC_TCP_WND
+#define PER_SOC_WND(pcb) (pcb->per_soc_wnd)
+#endif
 
 #ifdef __cplusplus
 }

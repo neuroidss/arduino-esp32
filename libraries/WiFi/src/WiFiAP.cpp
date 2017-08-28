@@ -69,6 +69,9 @@ static bool softap_config_equal(const wifi_config_t& lhs, const wifi_config_t& r
     if(lhs.ap.ssid_hidden != rhs.ap.ssid_hidden) {
         return false;
     }
+    if(lhs.ap.max_connection != rhs.ap.max_connection) {
+        return false;
+    }
     return true;
 }
 
@@ -79,12 +82,13 @@ static bool softap_config_equal(const wifi_config_t& lhs, const wifi_config_t& r
 
 /**
  * Set up an access point
- * @param ssid          Pointer to the SSID (max 63 char).
- * @param passphrase    (for WPA2 min 8 char, for open use NULL)
- * @param channel       WiFi channel number, 1 - 13.
- * @param ssid_hidden   Network cloaking (0 = broadcast SSID, 1 = hide SSID)
- */
-bool WiFiAPClass::softAP(const char* ssid, const char* passphrase, int channel, int ssid_hidden)
+ * @param ssid              Pointer to the SSID (max 63 char).
+ * @param passphrase        (for WPA2 min 8 char, for open use NULL)
+ * @param channel           WiFi channel number, 1 - 13.
+ * @param ssid_hidden       Network cloaking (0 = broadcast SSID, 1 = hide SSID)
+ * @param max_connection    Max simultaneous connected clients, 1 - 4.
+*/
+bool WiFiAPClass::softAP(const char* ssid, const char* passphrase, int channel, int ssid_hidden, int max_connection)
 {
 
     if(!WiFi.enableAP(true)) {
@@ -109,7 +113,7 @@ bool WiFiAPClass::softAP(const char* ssid, const char* passphrase, int channel, 
     conf.ap.channel = channel;
     conf.ap.ssid_len = strlen(ssid);
     conf.ap.ssid_hidden = ssid_hidden;
-    conf.ap.max_connection = 4;
+    conf.ap.max_connection = max_connection;
     conf.ap.beacon_interval = 100;
 
     if(!passphrase || strlen(passphrase) == 0) {
@@ -122,16 +126,11 @@ bool WiFiAPClass::softAP(const char* ssid, const char* passphrase, int channel, 
 
     wifi_config_t conf_current;
     esp_wifi_get_config(WIFI_IF_AP, &conf_current);
-    if(softap_config_equal(conf, conf_current)) {
-        //DEBUGV("softap config unchanged");
-        return true;
+    if(!softap_config_equal(conf, conf_current) && esp_wifi_set_config(WIFI_IF_AP, &conf) != ESP_OK) {
+        return false;
     }
 
-    bool ret;
-
-    ret = esp_wifi_set_config(WIFI_IF_AP, &conf) == ESP_OK;
-
-    return ret;
+    return true;
 }
 
 
@@ -149,13 +148,26 @@ bool WiFiAPClass::softAPConfig(IPAddress local_ip, IPAddress gateway, IPAddress 
         return false;
     }
 
+    esp_wifi_start();
+
     tcpip_adapter_ip_info_t info;
     info.ip.addr = static_cast<uint32_t>(local_ip);
     info.gw.addr = static_cast<uint32_t>(gateway);
     info.netmask.addr = static_cast<uint32_t>(subnet);
     tcpip_adapter_dhcps_stop(TCPIP_ADAPTER_IF_AP);
-    if(tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &info)) {
-        return tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP);
+    if(tcpip_adapter_set_ip_info(TCPIP_ADAPTER_IF_AP, &info) == ESP_OK) {
+        dhcps_lease_t lease;
+        lease.enable = true;
+        lease.start_ip.addr = static_cast<uint32_t>(local_ip) + (1 << 24);
+        lease.end_ip.addr = static_cast<uint32_t>(local_ip) + (11 << 24);
+
+        tcpip_adapter_dhcps_option(
+            (tcpip_adapter_option_mode_t)TCPIP_ADAPTER_OP_SET,
+            (tcpip_adapter_option_id_t)REQUESTED_IP_ADDRESS,
+            (void*)&lease, sizeof(dhcps_lease_t)
+        );
+
+        return tcpip_adapter_dhcps_start(TCPIP_ADAPTER_IF_AP) == ESP_OK;
     }
     return false;
 }
@@ -189,9 +201,9 @@ bool WiFiAPClass::softAPdisconnect(bool wifioff)
  */
 uint8_t WiFiAPClass::softAPgetStationNum()
 {
-    uint16_t number;
-    if(esp_wifi_get_ap_num(&number) == ESP_OK) {
-        return number;
+    wifi_sta_list_t clients;
+    if(esp_wifi_ap_get_sta_list(&clients) == ESP_OK) {
+        return clients.num;
     }
     return 0;
 }
@@ -231,4 +243,49 @@ String WiFiAPClass::softAPmacAddress(void)
 
     sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return String(macStr);
+}
+
+/**
+ * Get the softAP interface Host name.
+ * @return char array hostname
+ */
+const char * WiFiAPClass::softAPgetHostname()
+{
+    const char * hostname;
+    if(tcpip_adapter_get_hostname(TCPIP_ADAPTER_IF_AP, &hostname)) {
+        return NULL;
+    }
+    return hostname;
+}
+
+/**
+ * Set the softAP    interface Host name.
+ * @param  hostname  pointer to const string
+ * @return true on   success
+ */
+bool WiFiAPClass::softAPsetHostname(const char * hostname)
+{
+    return tcpip_adapter_set_hostname(TCPIP_ADAPTER_IF_AP, hostname) == ESP_OK;
+}
+
+/**
+ * Enable IPv6 on the softAP interface.
+ * @return true on success
+ */
+bool WiFiAPClass::softAPenableIpV6()
+{
+    return tcpip_adapter_create_ip6_linklocal(TCPIP_ADAPTER_IF_AP) == ESP_OK;
+}
+
+/**
+ * Get the softAP interface IPv6 address.
+ * @return IPv6Address softAP IPv6
+ */
+IPv6Address WiFiAPClass::softAPIPv6()
+{
+    static ip6_addr_t addr;
+    if(tcpip_adapter_get_ip6_linklocal(TCPIP_ADAPTER_IF_AP, &addr)) {
+        return IPv6Address();
+    }
+    return IPv6Address(addr.addr);
 }

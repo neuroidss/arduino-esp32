@@ -33,11 +33,13 @@
 #define __LWIPOPTS_H__
 
 #include <stdlib.h>
+#include <time.h>
+#include <sys/time.h>
+#include <sys/fcntl.h>
 #include "esp_task.h"
 #include "sdkconfig.h"
 
 /* Enable all Espressif-only options */
-#define LWIP_ESP8266
 
 /*
    -----------------------------------------------
@@ -63,8 +65,8 @@
  */
 #define SMEMCPY(dst,src,len)            memcpy(dst,src,len)
 
-extern unsigned long os_random(void);
-#define LWIP_RAND	rand
+#define LWIP_RAND       rand
+
 /*
    ------------------------------------
    ---------- Memory options ----------
@@ -96,17 +98,37 @@ extern unsigned long os_random(void);
    ---------- Internal Memory Pool Sizes ----------
    ------------------------------------------------
 */
-/**
- * MEMP_NUM_TCP_PCB: the number of simulatenously active TCP connections.
- * (requires the LWIP_TCP option)
- */
-#define MEMP_NUM_TCP_PCB                5
 
 /**
  * MEMP_NUM_NETCONN: the number of struct netconns.
  * (only needed if you use the sequential API, like api_lib.c)
  */
-#define MEMP_NUM_NETCONN                10
+#define MEMP_NUM_NETCONN                CONFIG_LWIP_MAX_SOCKETS
+
+/**
+ * MEMP_NUM_RAW_PCB: Number of raw connection PCBs
+ * (requires the LWIP_RAW option)
+ */
+#define MEMP_NUM_RAW_PCB                16
+
+/**
+ * MEMP_NUM_TCP_PCB: the number of simulatenously active TCP connections.
+ * (requires the LWIP_TCP option)
+ */
+#define MEMP_NUM_TCP_PCB                16
+
+/**
+ * MEMP_NUM_TCP_PCB_LISTEN: the number of listening TCP connections.
+ * (requires the LWIP_TCP option)
+ */
+#define MEMP_NUM_TCP_PCB_LISTEN         16
+
+/**
+ * MEMP_NUM_UDP_PCB: the number of UDP protocol control blocks. One
+ * per active UDP "connection".
+ * (requires the LWIP_UDP option)
+ */
+#define MEMP_NUM_UDP_PCB                16
 
 /*
    --------------------------------
@@ -132,14 +154,14 @@ extern unsigned long os_random(void);
  * this option does not affect outgoing packet sizes, which can be controlled
  * via IP_FRAG.
  */
-#define IP_REASSEMBLY                   0
+#define IP_REASSEMBLY                   CONFIG_LWIP_IP_REASSEMBLY
 
 /**
  * IP_FRAG==1: Fragment outgoing IP packets if their size exceeds MTU. Note
  * that this option does not affect incoming packet sizes, which can be
  * controlled via IP_REASSEMBLY.
  */
-#define IP_FRAG                         0
+#define IP_FRAG                         CONFIG_LWIP_IP_FRAG
 
 /**
  * IP_REASS_MAXAGE: Maximum time (in multiples of IP_TMR_INTERVAL - so seconds, normally)
@@ -162,11 +184,19 @@ extern unsigned long os_random(void);
    ----------------------------------
 */
 
+#define LWIP_BROADCAST_PING CONFIG_LWIP_BROADCAST_PING
+
+#define LWIP_MULTICAST_PING CONFIG_LWIP_MULTICAST_PING
+
 /*
    ---------------------------------
    ---------- RAW options ----------
    ---------------------------------
 */
+/**
+ * LWIP_RAW==1: Enable application layer to hook into the IP layer itself.
+ */
+#define LWIP_RAW                        1
 
 /*
    ----------------------------------
@@ -178,13 +208,40 @@ extern unsigned long os_random(void);
  */
 #define LWIP_DHCP                       1
 
+#define DHCP_MAXRTX                     0
 
-#define DHCP_MAXRTX						0   //(*(volatile uint32*)0x600011E0)
+/**
+ * DHCP_DOES_ARP_CHECK==1: Do an ARP check on the offered address.
+ */
+#define DHCP_DOES_ARP_CHECK             CONFIG_LWIP_DHCP_DOES_ARP_CHECK
+
 /*
    ------------------------------------
    ---------- AUTOIP options ----------
    ------------------------------------
 */
+#if CONFIG_MDNS
+ /**
+  * LWIP_AUTOIP==1: Enable AUTOIP module.
+  */
+#define LWIP_AUTOIP                     1
+
+/**
+* LWIP_DHCP_AUTOIP_COOP==1: Allow DHCP and AUTOIP to be both enabled on
+* the same interface at the same time.
+*/
+#define LWIP_DHCP_AUTOIP_COOP           1
+
+/**
+* LWIP_DHCP_AUTOIP_COOP_TRIES: Set to the number of DHCP DISCOVER probes
+* that should be sent before falling back on AUTOIP. This can be set
+* as low as 1 to get an AutoIP address very quickly, but you should
+* be prepared to handle a changing IP address when DHCP overrides
+* AutoIP.
+*/
+#define LWIP_DHCP_AUTOIP_COOP_TRIES     2
+#endif
+
 /*
    ----------------------------------
    ---------- SNMP options ----------
@@ -221,30 +278,13 @@ extern unsigned long os_random(void);
    ---------- TCP options ----------
    ---------------------------------
 */
-/**
- * TCP_WND: The size of a TCP window.  This must be at least
- * (2 * TCP_MSS) for things to work well
- */
-#define PERF 1
-#ifdef PERF
-extern unsigned char misc_prof_get_tcpw(void);
-extern unsigned char misc_prof_get_tcp_snd_buf(void);
-#define TCP_WND                         (misc_prof_get_tcpw()*TCP_MSS)
-#define TCP_SND_BUF                     (misc_prof_get_tcp_snd_buf()*TCP_MSS)
-
-#else
-
-#define TCP_WND                         (4 * TCP_MSS)
-#define TCP_SND_BUF                     (2 * TCP_MSS)
-
-#endif
 
 
 /**
  * TCP_QUEUE_OOSEQ==1: TCP will queue segments that arrive out of order.
  * Define to 0 if your device is low on memory.
  */
-#define TCP_QUEUE_OOSEQ                 1
+#define TCP_QUEUE_OOSEQ                 CONFIG_TCP_QUEUE_OOSEQ
 
 /*
  *     LWIP_EVENT_API==1: The user defines lwip_tcp_event() to receive all
@@ -252,22 +292,40 @@ extern unsigned char misc_prof_get_tcp_snd_buf(void);
  *     LWIP_CALLBACK_API==1: The PCB callback function is called directly
  *         for the event. This is the default.
 */
-#define TCP_MSS                         1460
+#define TCP_MSS                         CONFIG_TCP_MSS
 
 /**
  * TCP_MAXRTX: Maximum number of retransmissions of data segments.
  */
-#define TCP_MAXRTX                      12  //(*(volatile uint32*)0x600011E8)
+#define TCP_MAXRTX                      CONFIG_TCP_MAXRTX
 
 /**
  * TCP_SYNMAXRTX: Maximum number of retransmissions of SYN segments.
  */
-#define TCP_SYNMAXRTX                   6   //(*(volatile uint32*)0x600011E4)
+#define TCP_SYNMAXRTX                   CONFIG_TCP_SYNMAXRTX
 
 /**
  * TCP_LISTEN_BACKLOG: Enable the backlog option for tcp listen pcb.
  */
 #define TCP_LISTEN_BACKLOG              1
+
+
+/**
+ * TCP_OVERSIZE: The maximum number of bytes that tcp_write may
+ * allocate ahead of time
+ */
+#ifdef CONFIG_TCP_OVERSIZE_MSS
+#define TCP_OVERSIZE                    TCP_MSS
+#endif
+#ifdef CONFIG_TCP_OVERSIZE_QUARTER_MSS
+#define TCP_OVERSIZE                    (TCP_MSS/4)
+#endif
+#ifdef CONFIG_TCP_OVERSIZE_DISABLE
+#define TCP_OVERSIZE                    0
+#endif
+#ifndef TCP_OVERSIZE
+#error "One of CONFIG_TCP_OVERSIZE_xxx options should be set by sdkconfig"
+#endif
 
 /*
    ----------------------------------
@@ -303,6 +361,19 @@ extern unsigned char misc_prof_get_tcp_snd_buf(void);
    ---------- LOOPIF options ----------
    ------------------------------------
 */
+#if CONFIG_MDNS
+/**
+ * LWIP_NETIF_LOOPBACK==1: Support sending packets with a destination IP
+ * address equal to the netif IP address, looping them back up the stack.
+ */
+#define LWIP_NETIF_LOOPBACK             1
+
+/**
+ * LWIP_LOOPBACK_MAX_PBUFS: Maximum number of pbufs on queue for loopback
+ * sending for each netif (0 = disabled)
+ */
+#define LWIP_LOOPBACK_MAX_PBUFS         8
+#endif
 
 /*
    ------------------------------------
@@ -339,22 +410,21 @@ extern unsigned char misc_prof_get_tcp_snd_buf(void);
  * The queue size value itself is platform-dependent, but is passed to
  * sys_mbox_new() when tcpip_init is called.
  */
-#define TCPIP_MBOX_SIZE                 16
+#define TCPIP_MBOX_SIZE                 32
 
 /**
  * DEFAULT_UDP_RECVMBOX_SIZE: The mailbox size for the incoming packets on a
  * NETCONN_UDP. The queue size value itself is platform-dependent, but is passed
  * to sys_mbox_new() when the recvmbox is created.
  */
-#define DEFAULT_UDP_RECVMBOX_SIZE       16
+#define DEFAULT_UDP_RECVMBOX_SIZE       CONFIG_UDP_RECVMBOX_SIZE
 
 /**
  * DEFAULT_TCP_RECVMBOX_SIZE: The mailbox size for the incoming packets on a
  * NETCONN_TCP. The queue size value itself is platform-dependent, but is passed
  * to sys_mbox_new() when the recvmbox is created.
  */
-#define DEFAULT_TCP_RECVMBOX_SIZE       16
-//#define DEFAULT_TCP_RECVMBOX_SIZE       6
+#define DEFAULT_TCP_RECVMBOX_SIZE       CONFIG_TCP_RECVMBOX_SIZE
 
 /**
  * DEFAULT_ACCEPTMBOX_SIZE: The mailbox size for the incoming connections.
@@ -362,6 +432,27 @@ extern unsigned char misc_prof_get_tcp_snd_buf(void);
  * sys_mbox_new() when the acceptmbox is created.
  */
 #define DEFAULT_ACCEPTMBOX_SIZE         6
+
+/**
+ * DEFAULT_THREAD_STACKSIZE: The stack size used by any other lwIP thread.
+ * The stack size value itself is platform-dependent, but is passed to
+ * sys_thread_new() when the thread is created.
+ */
+#define DEFAULT_THREAD_STACKSIZE        TCPIP_THREAD_STACKSIZE
+
+/**
+ * DEFAULT_THREAD_PRIO: The priority assigned to any other lwIP thread.
+ * The priority value itself is platform-dependent, but is passed to
+ * sys_thread_new() when the thread is created.
+ */
+#define DEFAULT_THREAD_PRIO             TCPIP_THREAD_PRIO
+
+/**
+ * DEFAULT_RAW_RECVMBOX_SIZE: The mailbox size for the incoming packets on a
+ * NETCONN_RAW. The queue size value itself is platform-dependent, but is passed
+ * to sys_mbox_new() when the recvmbox is created.
+ */
+#define DEFAULT_RAW_RECVMBOX_SIZE       6
 
 /*
    ----------------------------------------------
@@ -401,13 +492,22 @@ extern unsigned char misc_prof_get_tcp_snd_buf(void);
 /**
  * LWIP_SO_RCVBUF==1: Enable SO_RCVBUF processing.
  */
-#define LWIP_SO_RCVBUF                  1
+#define LWIP_SO_RCVBUF                  CONFIG_LWIP_SO_RCVBUF
 
 /**
  * SO_REUSE==1: Enable SO_REUSEADDR option.
  * This option is set via menuconfig.
  */
 #define SO_REUSE                        CONFIG_LWIP_SO_REUSE
+
+#if CONFIG_MDNS
+/**
+ * SO_REUSE_RXTOALL==1: Pass a copy of incoming broadcast/multicast packets
+ * to all local matches if SO_REUSEADDR is turned on.
+ * WARNING: Adds a memcpy for every packet if passing to more than one pcb!
+ */
+#define SO_REUSE_RXTOALL                1
+#endif
 
 /*
    ----------------------------------------
@@ -424,6 +524,56 @@ extern unsigned char misc_prof_get_tcp_snd_buf(void);
    ---------- PPP options ----------
    ---------------------------------
 */
+
+/**
+ * PPP_SUPPORT==1: Enable PPP.
+ */
+#define PPP_SUPPORT                     CONFIG_PPP_SUPPORT
+
+#if PPP_SUPPORT
+
+/**
+ * PAP_SUPPORT==1: Support PAP.
+ */
+#define PAP_SUPPORT                     CONFIG_PPP_PAP_SUPPORT
+
+/**
+ * CHAP_SUPPORT==1: Support CHAP.
+ */
+#define CHAP_SUPPORT                    CONFIG_PPP_CHAP_SUPPORT
+
+/**
+ * MSCHAP_SUPPORT==1: Support MSCHAP.
+ */
+#define MSCHAP_SUPPORT                  CONFIG_PPP_MSCHAP_SUPPORT
+
+/**
+ * CCP_SUPPORT==1: Support CCP.
+ */
+#define MPPE_SUPPORT                    CONFIG_PPP_MPPE_SUPPORT
+
+/**
+ * PPP_MAXIDLEFLAG: Max Xmit idle time (in ms) before resend flag char.
+ * TODO: If PPP_MAXIDLEFLAG > 0 and next package is send during PPP_MAXIDLEFLAG time,
+ *       then 0x7E is not added at the begining of PPP package but 0x7E termination
+ *       is always at the end. This behaviour brokes PPP dial with GSM (PPPoS).
+ *       The PPP package should always start and end with 0x7E.
+ */
+
+#define PPP_MAXIDLEFLAG                 0
+
+/**
+ * PPP_DEBUG: Enable debugging for PPP.
+ */
+#define PPP_DEBUG_ON					CONFIG_PPP_DEBUG_ON
+
+#if PPP_DEBUG_ON
+#define PPP_DEBUG                       LWIP_DBG_ON
+#else
+#define PPP_DEBUG                       LWIP_DBG_OFF
+#endif
+
+#endif
 
 /*
    --------------------------------------
@@ -446,6 +596,7 @@ extern unsigned char misc_prof_get_tcp_snd_buf(void);
    ---------- Hook options ---------------
    ---------------------------------------
 */
+#define LWIP_HOOK_IP4_ROUTE_SRC         ip4_route_src_hook
 
 /*
    ---------------------------------------
@@ -508,23 +659,100 @@ extern unsigned char misc_prof_get_tcp_snd_buf(void);
 #define TCPIP_DEBUG                     LWIP_DBG_OFF
 
 /**
+ * ETHARP_TRUST_IP_MAC==1: Incoming IP packets cause the ARP table to be
+ * updated with the source MAC and IP addresses supplied in the packet.
+ * You may want to disable this if you do not trust LAN peers to have the
+ * correct addresses, or as a limited approach to attempt to handle
+ * spoofing. If disabled, lwIP will need to make a new ARP request if
+ * the peer is not already in the ARP table, adding a little latency.
+ * The peer *is* in the ARP table if it requested our address before.
+ * Also notice that this slows down input processing of every IP packet!
+ */
+#define ETHARP_TRUST_IP_MAC             1
+
+
+/* Enable all Espressif-only options */
+
+#define ESP_LWIP                        1
+#define ESP_LWIP_ARP                    1
+#define ESP_PER_SOC_TCP_WND             1
+#define ESP_THREAD_SAFE                 1
+#define ESP_THREAD_SAFE_DEBUG           LWIP_DBG_OFF
+#define ESP_DHCP                        1
+#define ESP_DNS                         1
+#define ESP_IPV6_AUTOCONFIG             1
+#define ESP_PERF                        0
+#define ESP_RANDOM_TCP_PORT             1
+#define ESP_IP4_ATON                    1
+#define ESP_LIGHT_SLEEP                 1
+#define ESP_L2_TO_L3_COPY               CONFIG_L2_TO_L3_COPY
+#define ESP_STATS_MEM                   0
+#define ESP_STATS_DROP                  0
+#define ESP_STATS_TCP                   0
+#define ESP_DHCP_TIMER                  1
+#define ESP_LWIP_LOGI(...)              ESP_LOGI("lwip", __VA_ARGS__)
+
+#define TCP_WND_DEFAULT                 CONFIG_TCP_WND_DEFAULT
+#define TCP_SND_BUF_DEFAULT             CONFIG_TCP_SND_BUF_DEFAULT
+
+#if ESP_PERF
+#define DBG_PERF_PATH_SET(dir, point)
+#define DBG_PERF_FILTER_LEN             1000
+
+enum {
+  DBG_PERF_DIR_RX = 0,
+  DBG_PERF_DIR_TX,
+};
+
+enum {
+  DBG_PERF_POINT_INT       = 0,
+  DBG_PERF_POINT_WIFI_IN   = 1,
+  DBG_PERF_POINT_WIFI_OUT  = 2,
+  DBG_PERF_POINT_LWIP_IN   = 3,
+  DBG_PERF_POINT_LWIP_OUT  = 4,
+  DBG_PERF_POINT_SOC_IN    = 5,
+  DBG_PERF_POINT_SOC_OUT   = 6,
+};
+
+#else
+#define DBG_PERF_PATH_SET(dir, point)   
+#define DBG_PERF_FILTER_LEN             1000
+#endif
+
+#if ESP_PER_SOC_TCP_WND
+#define TCP_WND(pcb)                    (pcb->per_soc_tcp_wnd)
+#define TCP_SND_BUF(pcb)                (pcb->per_soc_tcp_snd_buf)
+#endif
+
+/**
  * DHCP_DEBUG: Enable debugging in dhcp.c.
  */
 #define DHCP_DEBUG                      LWIP_DBG_OFF
-#define LWIP_DEBUG                      0
+#define LWIP_DEBUG                      LWIP_DBG_OFF
 #define TCP_DEBUG                       LWIP_DBG_OFF
-#define THREAD_SAFE_DEBUG               LWIP_DBG_OFF
-#define LWIP_THREAD_SAFE                1
 
 #define CHECKSUM_CHECK_UDP              0
 #define CHECKSUM_CHECK_IP               0
 
-#define HEAP_HIGHWAT                    20*1024
-
 #define LWIP_NETCONN_FULLDUPLEX         1
 #define LWIP_NETCONN_SEM_PER_THREAD     1
 
+#define LWIP_DHCP_MAX_NTP_SERVERS       CONFIG_LWIP_DHCP_MAX_NTP_SERVERS
+#define LWIP_TIMEVAL_PRIVATE            0
 
+#define SNTP_SET_SYSTEM_TIME_US(sec, us)  \
+    do { \
+        struct timeval tv = { .tv_sec = sec, .tv_usec = us }; \
+        settimeofday(&tv, NULL); \
+    } while (0);
+
+#define SNTP_GET_SYSTEM_TIME(sec, us) \
+    do { \
+        struct timeval tv = { .tv_sec = 0, .tv_usec = 0 }; \
+        gettimeofday(&tv, NULL); \
+        (sec) = tv.tv_sec;  \
+        (us) = tv.tv_usec; \
+    } while (0);
 
 #define SOC_SEND_LOG //printf
 
